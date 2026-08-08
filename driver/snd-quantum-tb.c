@@ -96,6 +96,7 @@ MODULE_PARM_DESC(reg_scan, "Scan and dump first 256 bytes of MMIO (0x00-0xff).")
 static int reg_srate_offset = -1;
 module_param(reg_srate_offset, int, 0644);
 MODULE_PARM_DESC(reg_srate_offset, "MMIO offset for sample rate (hex, -1 disabled). Set with reg_srate_value.");
+
 static int reg_srate_value = 48000;
 module_param(reg_srate_value, int, 0644);
 MODULE_PARM_DESC(reg_srate_value, "Value for sample rate reg (e.g. 48000). -1 = use runtime rate when offset set.");
@@ -107,6 +108,7 @@ MODULE_PARM_DESC(reg_bufsize_offset, "MMIO offset for buffer size in bytes (hex,
 static int reg_fmt_offset = -1;
 module_param(reg_fmt_offset, int, 0644);
 MODULE_PARM_DESC(reg_fmt_offset, "MMIO offset for format (hex, -1 disabled).");
+
 static int reg_fmt_value = 0;
 module_param(reg_fmt_value, int, 0644);
 MODULE_PARM_DESC(reg_fmt_value, "Value for format reg. -1 = use runtime format width (bits) when offset set.");
@@ -120,6 +122,7 @@ MODULE_PARM_DESC(control_value, "Value for CONTROL 0x100 on start (-1 = 0x8). Tr
 static int reg_status2_value = -1;
 module_param(reg_status2_value, int, 0644);
 MODULE_PARM_DESC(reg_status2_value, "If >= 0, write to STATUS2 0x8 on prepare (hex). -1 = don't write.");
+
 static int reg_status3_value = -1;
 module_param(reg_status3_value, int, 0644);
 MODULE_PARM_DESC(reg_status3_value, "If >= 0, write to STATUS3 0x10 on prepare (hex). -1 = don't write.");
@@ -143,23 +146,24 @@ MODULE_LICENSE("GPL");
  * stream_start_writes.txt may be empty if Ghidra control function name differs; use these offsets.
  * Still missing (set via module params when found): sample rate reg, format reg, buffer size reg.
  */
-#define QUANTUM_REG_VERSION	0x0000	/* Version/ID register */
-#define QUANTUM_REG_STATUS1	0x0004	/* Status/Control */
-#define QUANTUM_REG_STATUS2	0x0008	/* Status/Control */
-#define QUANTUM_REG_STATUS3	0x0010	/* Status/Control */
-#define QUANTUM_REG_STATUS4	0x0014	/* Status/Control */
-#define QUANTUM_REG_CONTROL	0x0100	/* Control register (write 0x8) */
-#define QUANTUM_REG_STATUS5	0x0104	/* Status/Control */
-#define QUANTUM_REG_BUFFER0	0x10300	/* Buffer/Channel register (DMA buffer address) */
-#define QUANTUM_REG_BUFFER1	0x10304	/* Buffer/Channel register (DMA buffer address) */
+#define QUANTUM_REG_VERSION     0x0000  /* Version/ID register */
+#define QUANTUM_REG_STATUS1     0x0004  /* Status/Control */
+#define QUANTUM_REG_STATUS2     0x0008  /* Status/Control */
+#define QUANTUM_REG_STATUS3     0x0010  /* Status/Control */
+#define QUANTUM_REG_STATUS4     0x0014  /* Status/Control */
+#define QUANTUM_REG_CONTROL     0x0100  /* Control register (write 0x8) */
+#define QUANTUM_REG_STATUS5     0x0104  /* Status/Control */
+#define QUANTUM_REG_DMA_RESET   0x11004 /* Critical: DMA/FIFO Reset observed in Windows init */
+#define QUANTUM_REG_BUFFER0     0x10300 /* Buffer/Channel register (DMA buffer address) */
+#define QUANTUM_REG_BUFFER1     0x10304 /* Buffer/Channel register (DMA buffer address) */
 
 struct quantum_chip {
+	bool disconnected;
 	struct snd_card *card;
 	struct pci_dev *pci;
 	void __iomem *iobase;	/* BAR 0, 1 MiB from lspci */
 	int irq;
-	bool irq_requested;
-	bool msi_allocated;	/* true if pci_alloc_irq_vectors(MSI) succeeded */
+	bool msi_allocated;	/* Thunderbolt only supports MSI. No Legacy IRQ! */
 	struct snd_pcm *pcm;
 	struct snd_pcm_substream *playback_substream;
 	struct snd_pcm_substream *capture_substream;
@@ -227,6 +231,7 @@ static void quantum_init_model_data(struct quantum_chip *chip, struct pci_dev *p
 			break;
 		case PCI_DEVICE_ID_QUANTUM_MOBILE:
 			chip->model_name = QUANTUM_MOBILE_NAMELONG;
+			dev_warn(&pci->dev, "Unsupported Quantum device ID 0x%04x! Unreleased hardware.\n", pci->device);
 			break;
 		default:
 			chip->model_name = QUANTUM_NAMELONG;
@@ -334,12 +339,14 @@ static int quantum_pcm_prepare(struct snd_pcm_substream *substream)
 	/* Based on Ghidra analysis: 0x10300 and 0x10304 are buffer registers */
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		/* Write buffer address (lower 32 bits) */
+		wmb();
 		writel((u32)(dma_addr & 0xffffffff), chip->iobase + QUANTUM_REG_BUFFER0);
 		dev_info(&chip->pci->dev, "Prepare playback: dma_addr=0x%llx buffer_size=%zu -> 0x%x\n",
 			 (unsigned long long)dma_addr, buffer_size, (u32)(dma_addr & 0xffffffff));
 		/* Note: May need upper 32 bits or buffer size register */
 	} else {
 		/* Capture buffer */
+		wmb();
 		writel((u32)(dma_addr & 0xffffffff), chip->iobase + QUANTUM_REG_BUFFER1);
 		dev_info(&chip->pci->dev, "Prepare capture: dma_addr=0x%llx buffer_size=%zu -> 0x%x\n",
 			 (unsigned long long)dma_addr, buffer_size, (u32)(dma_addr & 0xffffffff));
@@ -357,10 +364,12 @@ static int quantum_pcm_prepare(struct snd_pcm_substream *substream)
 
 	/* Optional: stream-start path writes to 0x8 and 0x10 (trace value unknown) */
 	if (reg_status2_value >= 0) {
+		wmb();
 		writel((u32)reg_status2_value, chip->iobase + QUANTUM_REG_STATUS2);
 		dev_info(&chip->pci->dev, "Prepare: STATUS2 0x8 = 0x%x\n", (u32)reg_status2_value);
 	}
 	if (reg_status3_value >= 0) {
+		wmb();
 		writel((u32)reg_status3_value, chip->iobase + QUANTUM_REG_STATUS3);
 		dev_info(&chip->pci->dev, "Prepare: STATUS3 0x10 = 0x%x\n", (u32)reg_status3_value);
 	}
@@ -368,6 +377,7 @@ static int quantum_pcm_prepare(struct snd_pcm_substream *substream)
 	/* Write control register (from Ghidra: 0x100 = 0x8; overridable via control_value) */
 	{
 		u32 ctrl = (control_value >= 0) ? (u32)control_value : 0x8u;
+		wmb();
 		writel(ctrl, chip->iobase + QUANTUM_REG_CONTROL);
 		dev_info(&chip->pci->dev, "Prepare: CONTROL 0x100 = 0x%x (rate=%u format=%u)\n",
 			 ctrl, runtime->rate, (unsigned int)snd_pcm_format_width(runtime->format));
@@ -376,16 +386,19 @@ static int quantum_pcm_prepare(struct snd_pcm_substream *substream)
 	/* Optional: program when offset found via Ghidra / Windows capture */
 	if (reg_srate_offset >= 0) {
 		u32 srate = (reg_srate_value >= 0) ? (u32)reg_srate_value : (u32)runtime->rate;
+		wmb();
 		writel(srate, chip->iobase + reg_srate_offset);
 		dev_info(&chip->pci->dev, "Prepare: sample rate reg 0x%x = %u\n",
 			 reg_srate_offset, srate);
 	}
 	if (reg_bufsize_offset >= 0) {
+		wmb();
 		writel((u32)buffer_size, chip->iobase + reg_bufsize_offset);
 		dev_info(&chip->pci->dev, "Prepare: buffer size reg 0x%x = %zu\n",
 			 reg_bufsize_offset, buffer_size);
 	}
 	if (reg_fmt_offset >= 0) {
+		wmb();
 		u32 fmt = (reg_fmt_value >= 0) ? (u32)reg_fmt_value : (u32)snd_pcm_format_width(runtime->format);
 		writel(fmt, chip->iobase + reg_fmt_offset);
 		dev_info(&chip->pci->dev, "Prepare: format reg 0x%x = %u\n",
@@ -428,6 +441,7 @@ static int quantum_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 		{
 			u32 ctrl = (control_value >= 0) ? (u32)control_value : 0x8u;
 			control_val = readl(chip->iobase + QUANTUM_REG_CONTROL);
+		    wmb();
 			writel(ctrl, chip->iobase + QUANTUM_REG_CONTROL);
 			dev_info(&chip->pci->dev, "Trigger START %s: CONTROL 0x100 was 0x%x now 0x%x\n",
 				 substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? "playback" : "capture",
@@ -442,7 +456,7 @@ static int quantum_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 			chip->capture_substream = substream;
 
 		/* Use timer only if we didn't get an IRQ (fallback) */
-		if (!chip->irq_requested) {
+		if (chip->irq == -1) {
 			period_msec = (runtime->period_size * 1000) / runtime->rate;
 			if (period_msec < 1)
 				period_msec = 1;
@@ -461,6 +475,7 @@ static int quantum_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 
 		/* Stop hardware stream */
 		control_val = readl(chip->iobase + QUANTUM_REG_CONTROL);
+		wmb();
 		writel(0x0, chip->iobase + QUANTUM_REG_CONTROL);
 		dev_info(&chip->pci->dev, "Trigger STOP %s: CONTROL 0x100 was 0x%x now 0x0\n",
 			 substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? "playback" : "capture",
@@ -480,10 +495,11 @@ static int quantum_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 		{
 			u32 ctrl = (control_value >= 0) ? (u32)control_value : 0x8u;
 			control_val = readl(chip->iobase + QUANTUM_REG_CONTROL);
+		    wmb();
 			writel(ctrl, chip->iobase + QUANTUM_REG_CONTROL);
 		}
 		qr->running = true;
-		if (!chip->irq_requested) {
+		if (chip->irq == -1) {
 			period_msec = (runtime->period_size * 1000) / runtime->rate;
 			if (period_msec < 1)
 				period_msec = 1;
@@ -562,10 +578,14 @@ static void snd_quantum_free(struct snd_card *card)
 {
 	struct quantum_chip *chip = card->private_data;
 
-	if (chip->irq_requested && chip->irq >= 0)
+	if (chip->irq >= 0) {
 		free_irq(chip->irq, chip);
-	if (chip->msi_allocated)
+		chip->irq = -1;
+	}
+	if (chip->msi_allocated) {
 		pci_free_irq_vectors(chip->pci);
+		chip->msi_allocated = false;
+	}
 	if (chip->iobase)
 		pci_iounmap(chip->pci, chip->iobase);
 	pci_release_regions(chip->pci);
@@ -584,13 +604,25 @@ static irqreturn_t snd_quantum_interrupt(int irq, void *dev_id)
 	u32 status;
 	irqreturn_t handled = IRQ_NONE;
 
+	dev_info(&chip->pci->dev, "Interrupt triggered (IRQ: %i)\n", irq);
+
 	if (!chip->iobase)
+		return IRQ_NONE;
+
+	if (chip->disconnected)
 		return IRQ_NONE;
 
 	/* Read interrupt status register */
 	/* Based on Ghidra: status registers at 0x4, 0x8, 0x10, 0x14, 0x104 */
 	/* Check which one is the interrupt status (needs experimentation) */
 	status = readl(chip->iobase + QUANTUM_REG_STATUS1);
+
+	// 0xFFFFFFFF is returned when the bus is dead
+	if (status == 0xffffffff) {
+		dev_warn_ratelimited(&chip->pci->dev, "MMIO read failed, device disconnected?\n");
+		chip->disconnected = true;
+		return IRQ_NONE;
+	}
 
 	/* If no interrupt pending, return */
 	/* For now, assume any non-zero status means interrupt */
@@ -599,6 +631,7 @@ static irqreturn_t snd_quantum_interrupt(int irq, void *dev_id)
 
 	/* Acknowledge interrupt (write to status register to clear) */
 	/* Exact acknowledgment method needs experimentation */
+	wmb();
 	writel(status, chip->iobase + QUANTUM_REG_STATUS1);
 
 	/* Handle playback */
@@ -638,61 +671,143 @@ static irqreturn_t snd_quantum_interrupt(int irq, void *dev_id)
 	return handled;
 }
 
+/* ==========================================================================
+ * FIRMWARE MAILBOX INTERFACE - SKELETON
+ * TODO: Implement logic based on Ghidra analysis of QuantumSendFirmwareCommand
+ * ========================================================================== */
+
+/**
+ * Send a command code to the firmware
+ * @chip: The quantum chip structure
+ * @cmd: The command byte (e.g., 0x39 for '9')
+ * @data: Optional data buffer to send (can be NULL)
+ * @data_len: Length of optional data
+ *
+ * Returns: 0 on success, negative error code otherwise.
+ */
+static int send_fw_cmd(struct quantum_chip *chip, u8 cmd, const u8 *data, size_t data_len)
+{
+	/* FIXME:
+	 * 1. Identify the MMIO register to write the 'cmd' byte.
+	 * 2. Identify if 'data' needs to be copied to a specific buffer/region first.
+	 * 3. Identify the "Doorbell" register to trigger the command.
+	 * 4. Implement the polling loop waiting for the "Done" status.
+	 * 5. Handle timeouts and error flags.
+	 */
+	dev_err(&chip->pci->dev, "FIXME: Implement quantum_send_firmware_cmd (cmd=0x%02x)\n", cmd);
+	return -ENOSYS;
+}
+
+/**
+ * Read the response code and optional payload
+ * @chip: The quantum chip structure
+ * @response_code: Pointer to store the response byte (e.g., 0x3A for ':')
+ * @buffer: Buffer to store extended response data (can be NULL)
+ * @buffer_size: Size of the buffer
+ *
+ * Returns: 0 on success, negative error code otherwise.
+ */
+static int rcv_fw_resp(struct quantum_chip *chip, u8 *response_code, u8 *buffer, size_t buffer_size)
+{
+	/* FIXME:
+	 * 1. Identify the MMIO register or memory region containing the response code.
+	 * 2. Identify where the extended payload (e.g., channel list for cmd '9') is stored.
+	 * 3. Copy the response data to 'buffer' up to 'buffer_size'.
+	 * 4. Clear any "Done" or "Ack" flags if required by hardware.
+	 */
+	dev_err(&chip->pci->dev, "FIXME: Implement quantum_receive_firmware_response\n");
+	return -ENOSYS;
+}
+
 /* ----- Device init (Windows FUN_140003d60 style: init reads + enable) ----- */
 
-/*
- * Init writes table: run in order at probe when do_init_sequence is true.
- * Fill from scripts/ghidra trace_init_writes.py output (init_writes_likely.txt).
- * Sentinel: offset 0xFFFFFFFF ends the table.
- */
-#define INIT_WRITE_SENTINEL	0xFFFFFFFFu
-/* Minimal: STATUS2, then CONTROL 0 then enable. init_control_value overrides last 0x100 write. */
-static const struct { u32 offset; u32 value; } quantum_init_writes[] = {
-	{ 0x8,   0x8 },       /* STATUS2 (from trace) */
-	{ 0x100, 0 },         /* CONTROL stop */
-	{ 0x100, 0x8 },       /* CONTROL enable (or init_control_value if >= 0) */
-	{ INIT_WRITE_SENTINEL, 0 },
-};
-
-static void quantum_device_init(struct quantum_chip *chip)
+static int quantum_device_init(struct quantum_chip *chip)
 {
-	struct pci_dev *pci = chip->pci;
-	void __iomem *iobase = chip->iobase;
-	size_t i;
+    void __iomem *iobase = chip->iobase;
+    u8 response_code;
+    u8 channel_list[32]; // Buffer pour la liste des canaux
+    int err;
 
-	if (!iobase)
-		return;
+    dev_info(&chip->pci->dev, "Starting Quantum Firmware Handshake...\n");
 
-	/* Same register reads as Windows init (FUN_140003d60) */
-	dev_info(&pci->dev, "Read Init:\n"
-					 "\tVersion 0x00=0x%08x\n"
-					 "\tStatus1 0x04=0x%08x\n"
-					 "\tStatus2 0x08=0x%08x\n"
-					 "\tStatus3 0x10=0x%08x\n"
-					 "\tStatus4 0x14=0x%08x\n"
-					 "\tStatus5 0x104=0x%08x\n",
-		 readl(iobase + QUANTUM_REG_VERSION),
-		 readl(iobase + QUANTUM_REG_STATUS1),
-		 readl(iobase + QUANTUM_REG_STATUS2),
-		 readl(iobase + QUANTUM_REG_STATUS3),
-		 readl(iobase + QUANTUM_REG_STATUS4),
-		 readl(iobase + QUANTUM_REG_STATUS5));
+    // 1. Reset DMA/FIFO
+	wmb();
+    writel(0x00000000, iobase + QUANTUM_REG_DMA_RESET); // 0x11004
 
-	if (!do_init_sequence)
-		return;
+	// FIXME: probably not needed
+    usleep_range(5000, 10000);
 
-	for (i = 0; i < ARRAY_SIZE(quantum_init_writes); i++) {
-		u32 off = quantum_init_writes[i].offset;
-		u32 val = quantum_init_writes[i].value;
-		if (off == INIT_WRITE_SENTINEL)
-			break;
-		if (off == QUANTUM_REG_CONTROL && init_control_value >= 0)
-			val = (u32)init_control_value;
-		writel(val, iobase + off);
-		dev_info(&pci->dev, "Write Init: 0x%x = 0x%x\n", off, val);
-	}
-	/* Give hardware time to settle (some interfaces need this for LED/ready) */
-	msleep(20);
+    // 2. Enumerate channels
+    // Command'9' (0x39)
+    err = send_fw_cmd(chip, 0x39, NULL, 0);
+    if (err < 0) goto err_handshake;
+
+    // Await response ':' (0x3A) and read channels list
+    err = rcv_fw_resp(chip, &response_code, channel_list, sizeof(channel_list));
+    if (err < 0 || response_code != 0x3A) {
+        dev_err(&chip->pci->dev, "Failed Enumerate Channels: Got 0x%02x expected 0x3A\n", response_code);
+        goto err_handshake;
+    }
+
+    // TODO: Parse channel_list and store to chip->active_channels_count
+    dev_info(&chip->pci->dev, "Channels enumerated successfully.\n");
+
+    // 3. Request topology
+    // Command '3' (0x33)
+    err = send_fw_cmd(chip, 0x33, NULL, 0);
+    if (err < 0) goto err_handshake;
+
+	// Await response '6' (0x36) and store topology
+    err = rcv_fw_resp(chip, &response_code, NULL, 0);
+    if (err < 0 || response_code != 0x36) {
+        dev_err(&chip->pci->dev, "Failed Topology Handshake: Got 0x%02x\n", response_code);
+        goto err_handshake;
+    }
+
+    // TODO: extract ChainID from response and store somewhere
+	dev_info(&chip->pci->dev, "Topology obtained successfully.\n");
+
+    // 4. Sync Sample Rate
+    // Command '1' (0x31)
+    err = send_fw_cmd(chip, 0x31, NULL, 0);
+    if (err < 0) goto err_handshake;
+
+	// Await response '5' (0x35) and inform ALSA
+    err = rcv_fw_resp(chip, &response_code, NULL, 0);
+    if (err < 0 || response_code != 0x35) { // Réponse attendue '5'
+        dev_err(&chip->pci->dev, "Failed SampleRate Handshake: Got 0x%02x\n", response_code);
+        goto err_handshake;
+    }
+
+	// TODO: decode sample rate & inform ALSA
+	dev_info(&chip->pci->dev, "Initial sample rate obtained successfully.\n");
+
+
+    // 5. FINAL GO (Synchronous for bring-up. Must be asynchronous to handle the soft power button.)
+    // Command ';' (0x3B)
+    err = send_fw_cmd(chip, 0x3B, NULL, 0);
+    if (err < 0) goto err_handshake;
+
+	// Await response '<' (0x3C)
+    err = rcv_fw_resp(chip, &response_code, NULL, 0);
+    if (err < 0 || response_code != 0x3C) {
+        dev_err(&chip->pci->dev, "Failed Final Go Handshake: Got 0x%02x\n", response_code);
+        goto err_handshake;
+    }
+
+	// TODO Verify response payload is '1'
+    // If '0', the card refuses to start (Soft-Power Off?)
+    dev_info(&chip->pci->dev, "Firmware Handshake SUCCESS. Interface ready.\n");
+
+    // Now we may read & write to MMIO if needed
+    // wmb();
+    // writel(0x8, iobase + QUANTUM_REG_CONTROL);
+
+    return 0;
+
+err_handshake:
+    dev_err(&chip->pci->dev, "Firmware Handshake FAILED. Device will not function.\n");
+    return -EIO; // Or -ENODEV
 }
 
 /* ----- Create chip: enable PCI, claim BAR, IRQ, MMIO probe ----- */
@@ -701,12 +816,10 @@ static int snd_quantum_create(struct snd_card *card, struct pci_dev *pci)
 {
 	struct quantum_chip *chip = card->private_data;
 	int err;
-	int i;
 
 	chip->card = card;
 	chip->pci = pci;
-	chip->irq = pci->irq;
-	chip->irq_requested = false;
+	chip->irq = -1;
 	chip->msi_allocated = false;
 	chip->playback_substream = NULL;
 	chip->capture_substream = NULL;
@@ -715,86 +828,102 @@ static int snd_quantum_create(struct snd_card *card, struct pci_dev *pci)
 	chip->playback_buffer_size = 0;
 	chip->capture_buffer_size = 0;
 
+	// TODO: Check we're not already initialized
+
+	// TODO: Internal control channel
+
+	// TODO: Internal control Request
+
 	/* Initialize model-specific data (name, etc.) */
 	quantum_init_model_data(chip, pci);
 
+	// TODO: Map DeviceProfile
+
+	dev_info(&pci->dev, "Enabling PCI device");
 	err = pci_enable_device(pci);
 	if (err < 0)
 		return err;
 
-	if (dma_set_mask_and_coherent(&pci->dev, DMA_BIT_MASK(32)) < 0) {
-		pci_disable_device(pci);
-		return -ENXIO;
-	}
-
+	dev_info(&pci->dev, "Requesting PCI regions");
 	err = pci_request_regions(pci, DRV_NAME);
 	if (err < 0) {
 		pci_disable_device(pci);
 		return err;
 	}
 
+	dev_info(&pci->dev, "Preparing MMIO");
 	chip->iobase = pci_iomap(pci, 0, 0);
 	if (!chip->iobase) {
 		err = -ENOMEM;
 		goto fail_regions;
 	}
 
-	/* Log first 64 bytes of BAR 0 for reverse-engineering (word-aligned) */
-	for (i = 0; i < 64; i += 4)
-		dev_info(&pci->dev, "MMIO+0x%02x: 0x%08x\n", i, readl(chip->iobase + i));
+	// 0. Read state
+	dev_info(&pci->dev, "Red register 0x00: 0x%08x\n", readl(chip->iobase + 0x00));
+	dev_info(&pci->dev, "Red register 0x04: 0x%08x\n", readl(chip->iobase + 0x04));
+	dev_info(&pci->dev, "Red register 0x08: 0x%08x\n", readl(chip->iobase + 0x08));
+	dev_info(&pci->dev, "Red register 0x10: 0x%08x\n", readl(chip->iobase + 0x10));
+	dev_info(&pci->dev, "Red register 0x14: 0x%08x\n", readl(chip->iobase + 0x14));
+	dev_info(&pci->dev, "Red register 0x10300 (VendorID): 0x%08x\n", readl(chip->iobase + 0x10300));
+	dev_info(&pci->dev, "Red register 0x10304 (DeviceID): 0x%08x\n", readl(chip->iobase + 0x10304));
+	dev_info(&pci->dev, "Red register 0x105 (FWVersion?): 0x%08x\n", readl(chip->iobase + 0x105));
 
-	/* Device init: same reads as Windows + CONTROL 0 then 0x8 (for blue LED / audio) */
-	quantum_device_init(chip);
+	// TODO: initialize DMA and ranges
+	// dev_info(&pci->dev, "Setting up DMA");
+	// if (dma_set_mask_and_coherent(&pci->dev, DMA_BIT_MASK(32)) < 0) {
+	// 	pci_disable_device(pci);
+	// 	return -ENXIO;
+	// }
+	//
+	// /* Register access for reverse engineering */
+	// if (reg_scan) {
+	// 	dev_info(&pci->dev, "=== MMIO Scan (0x00-0xff) ===");
+	// 	for (i = 0; i < 256; i += 4)
+	// 		dev_info(&pci->dev, "MMIO+0x%02x: 0x%08x", i, readl(chip->iobase + i));
+	// 	reg_scan = false; /* Clear after one scan */
+	// }
+	//
+	// if (reg_read_offset >= 0 && reg_read_offset < (1024 * 1024)) {
+	// 	u32 val = readl(chip->iobase + reg_read_offset);
+	// 	dev_info(&pci->dev, "MMIO+0x%03x READ: 0x%08x", reg_read_offset, val);
+	// 	reg_read_offset = -1; /* Clear after read */
+	// }
+	//
+	// if (reg_write_offset >= 0 && reg_write_offset < (1024 * 1024)) {
+	//  wmb();
+	// 	writel(reg_write_value, chip->iobase + reg_write_offset);
+	// 	dev_info(&pci->dev, "MMIO+0x%03x WRITE: 0x%08x (old: 0x%08x)",
+	// 		 reg_write_offset, reg_write_value,
+	// 		 readl(chip->iobase + reg_write_offset));
+	// 	reg_write_offset = -1; /* Clear after write */
+	// 	reg_write_value = 0;
+	// }
 
-	/* Register access for reverse engineering */
-	if (reg_scan) {
-		dev_info(&pci->dev, "=== MMIO Scan (0x00-0xff) ===");
-		for (i = 0; i < 256; i += 4)
-			dev_info(&pci->dev, "MMIO+0x%02x: 0x%08x", i, readl(chip->iobase + i));
-		reg_scan = false; /* Clear after one scan */
-	}
-
-	if (reg_read_offset >= 0 && reg_read_offset < (1024 * 1024)) {
-		u32 val = readl(chip->iobase + reg_read_offset);
-		dev_info(&pci->dev, "MMIO+0x%03x READ: 0x%08x", reg_read_offset, val);
-		reg_read_offset = -1; /* Clear after read */
-	}
-
-	if (reg_write_offset >= 0 && reg_write_offset < (1024 * 1024)) {
-		writel(reg_write_value, chip->iobase + reg_write_offset);
-		dev_info(&pci->dev, "MMIO+0x%03x WRITE: 0x%08x (old: 0x%08x)",
-			 reg_write_offset, reg_write_value,
-			 readl(chip->iobase + reg_write_offset));
-		reg_write_offset = -1; /* Clear after write */
-		reg_write_value = 0;
-	}
-
-	/* Prefer MSI (Thunderbolt PCIe often has legacy IRQ 0); fall back to legacy if valid */
-	if (pci_alloc_irq_vectors(pci, 1, 1, PCI_IRQ_MSI) == 1) {
+	/* Attempt to allocate one MSI vector */
+	if (pci_alloc_irq_vectors(pci, 1, 1, PCI_IRQ_MSI) < 0) {
+		dev_warn(&pci->dev, "MSI allocation failed. Falling back to timer-only mode (no IRQs).\n");
+	} else {
 		chip->irq = pci_irq_vector(pci, 0);
 		chip->msi_allocated = true;
-	} else {
-		pci_free_irq_vectors(pci);
-		chip->irq = pci->irq;
-	}
-	/* Only request if we have a usable IRQ (legacy IRQ 0 is the PIT on x86, not our device) */
-	if (chip->irq > 0) {
-		err = request_irq(chip->irq, snd_quantum_interrupt, IRQF_SHARED,
-				  DRV_NAME, chip);
-		if (err == 0) {
-			chip->irq_requested = true;
-			card->sync_irq = chip->irq;
+
+		/* Request the IRQ */
+		if (request_irq(chip->irq, snd_quantum_interrupt, 0, DRV_NAME, chip) < 0) {
+			dev_warn(&pci->dev, "IRQ request failed. Disabling MSI and falling back to timer-only mode.\n");
+			pci_free_irq_vectors(pci);
+			chip->irq = -1;
+			chip->msi_allocated = false;
 		} else {
-			dev_warn(&pci->dev, "cannot request irq %d, using timer fallback: %d\n",
-				 chip->irq, err);
+			dev_info(&pci->dev, "MSI IRQ %d successfully allocated.\n", chip->irq);
+			card->sync_irq = chip->irq;
 		}
-	} else if (chip->irq == 0) {
-		dev_info(&pci->dev, "legacy irq 0 (invalid), using timer fallback\n");
 	}
-	if (!chip->irq_requested && chip->msi_allocated) {
-		pci_free_irq_vectors(pci);
-		chip->msi_allocated = false;
-	}
+
+	// TODO: Prepare workers or Linux equivalents
+
+	dev_info(&pci->dev, "Initializing device");
+	quantum_device_init(chip);
+
+	// TODO: Launch workers
 
 	err = snd_quantum_pcm_new(chip);
 	if (err < 0)
@@ -803,9 +932,9 @@ static int snd_quantum_create(struct snd_card *card, struct pci_dev *pci)
 	return 0;
 
 fail_pcm:
-	if (chip->irq_requested) {
+	if (chip->irq >= 0) {
 		free_irq(chip->irq, chip);
-		chip->irq_requested = false;
+		chip->irq = -1;
 	}
 	if (chip->msi_allocated) {
 		pci_free_irq_vectors(pci);
@@ -876,7 +1005,47 @@ static int snd_quantum_probe(struct pci_dev *pci, const struct pci_device_id *pc
 
 static void snd_quantum_remove(struct pci_dev *pci)
 {
-	snd_card_free(pci_get_drvdata(pci));
+	struct snd_card *card = pci_get_drvdata(pci);
+	struct quantum_chip *chip;
+
+	if (!card)
+		return;
+
+	chip = card->private_data;
+
+	/* 1. Mark disconnected to block IRQ and timers */
+	chip->disconnected = true;
+
+	/* 2. Stop hardware before freing it */
+	if (chip->iobase) {
+		/* Write 0 to CONTROL to immediately stop DMA */
+		wmb();
+		writel(0x0, chip->iobase + QUANTUM_REG_CONTROL);
+	}
+
+	/* 3. Stop software timers */
+	if (chip->playback_substream) {
+		struct quantum_runtime *qr = chip->playback_substream->runtime->private_data;
+		if (qr) {
+			qr->running = false;
+			timer_delete_sync(&qr->timer);
+		}
+	}
+	if (chip->capture_substream) {
+		struct quantum_runtime *qr = chip->capture_substream->runtime->private_data;
+		if (qr) {
+			qr->running = false;
+			timer_delete_sync(&qr->timer);
+		}
+	}
+
+	/* 4. Free ALSA resources */
+	snd_card_free(card);
+
+	/* Note: snd_card_free calls card->private_free (snd_quantum_free)
+	   which will do pci_iounmap and free_irq. */
+
+	dev_info(&pci->dev, "Removed driver successfully…\n");
 }
 
 static struct pci_driver quantum_driver = {
