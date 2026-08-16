@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Experimental ALSA PCI driver for PreSonus Quantum 2626.
- * PCI ID 1c67:0104.
+ * SPDX-FileCopyrightText: 2026 Jamie Steele
+ * SPDX-FileCopyrightText: 2026 Raphaël Doursenaud
+ *
+ * Experimental ALSA PCI driver for PreSonus Quantum Thunderbolt Family
  *
  * The TCI control mailbox is implemented from static analysis of the vendor's
  * macOS DriverKit extension. PCM rate and channel profiles follow the
@@ -25,11 +27,33 @@
 #include <sound/pcm_params.h>
 
 #define DRV_NAME "snd-quantum2626"
-#define QUANTUM_NAMELONG "PreSonus Quantum 2626"
 
-/* PreSonus PCI vendor ID (from driver-reference/pae_quantum.inf) */
-#define PCI_VENDOR_ID_PRESONUS	0x1c67
-#define PCI_DEVICE_ID_QUANTUM2626	0x0104
+/* ----- PCI table ----- */
+
+// TODO: move to `pci_ids.h` for kernel inclusion
+#define PCI_VENDOR_ID_PRESONUS			0x1c67
+
+#define PCI_DEVICE_ID_QUANTUM			0x0101
+#define PCI_DEVICE_ID_QUANTUM2			0x0102
+#define PCI_DEVICE_ID_QUANTUM4848		0x0103
+#define PCI_DEVICE_ID_QUANTUM2626		0x0104
+#define PCI_DEVICE_ID_QUANTUM_MOBILE	0x0105	/* Unreleased prototype? */
+
+#define LONGNAME_QUANTUM				"PreSonus Quantum"
+#define LONGNAME_QUANTUM_2				"PreSonus Quantum 2"
+#define LONGNAME_QUANTUM_4848			"PreSonus Quantum 4848"
+#define LONGNAME_QUANTUM_2626			"PreSonus Quantum 2626"
+#define LONGNAME_QUANTUM_MOBILE			"Presonus Quantum Mobile"	/* Unreleased prototype? */
+
+static const struct pci_device_id snd_quantum_ids[] = {
+	{ PCI_DEVICE(PCI_VENDOR_ID_PRESONUS, PCI_DEVICE_ID_QUANTUM) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_PRESONUS, PCI_DEVICE_ID_QUANTUM2) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_PRESONUS, PCI_DEVICE_ID_QUANTUM4848) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_PRESONUS, PCI_DEVICE_ID_QUANTUM2626) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_PRESONUS, PCI_DEVICE_ID_QUANTUM_MOBILE) },
+	{ 0, }
+};
+MODULE_DEVICE_TABLE(pci, snd_quantum_ids);
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
@@ -59,9 +83,11 @@ static bool reg_scan;
 module_param(reg_scan, bool, 0644);
 MODULE_PARM_DESC(reg_scan, "Scan and dump first 256 bytes of MMIO (0x00-0xff).");
 
-MODULE_AUTHOR("Quantum2626 Linux driver project");
+MODULE_AUTHOR("Quantum Thunderbolt Family Linux Driver Project, "
+	"Jamie Steele <steele.jamie1991@gmail.com>, "
+	"Raphaël Doursenaud <raphael@doursenaud.fr>");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Experimental PreSonus Quantum 2626 ALSA PCI driver");
+MODULE_DESCRIPTION("Experimental PreSonus Quantum Thunderbolt Family ALSA PCIe driver");
 
 /* Read-only identity/status registers. */
 #define QUANTUM_REG_VERSION	0x0000	/* Version/ID register */
@@ -163,6 +189,7 @@ struct quantum_dma_table {
 struct quantum_chip {
 	struct snd_card *card;
 	struct pci_dev *pci;
+	const char *model_name;
 	void __iomem *iobase;	/* BAR 0, 1 MiB from lspci */
 	int irq;
 	bool irq_requested;
@@ -1435,11 +1462,11 @@ static int snd_quantum_pcm_new(struct quantum_chip *chip)
 {
 	int err;
 
-	err = snd_pcm_new(chip->card, QUANTUM_NAMELONG, 0, 1, 1, &chip->pcm);
+	err = snd_pcm_new(chip->card, chip->model_name, 0, 1, 1, &chip->pcm);
 	if (err < 0)
 		return err;
 	chip->pcm->private_data = chip;
-	strscpy(chip->pcm->name, QUANTUM_NAMELONG, sizeof(chip->pcm->name));
+	strscpy(chip->pcm->name, chip->model_name, sizeof(chip->pcm->name));
 	snd_pcm_set_ops(chip->pcm, SNDRV_PCM_STREAM_PLAYBACK,
 			&quantum_pcm_ops);
 	snd_pcm_set_ops(chip->pcm, SNDRV_PCM_STREAM_CAPTURE, &quantum_pcm_ops);
@@ -1563,11 +1590,46 @@ static void quantum_log_device_info(struct quantum_chip *chip)
 
 /* ----- Create chip: enable PCI, claim BAR, IRQ, MMIO probe ----- */
 
+/* Initialize model-specific data in the chip structure */
+static void quantum_init_model_data(
+	struct quantum_chip *chip,
+	struct pci_dev *pci)
+{
+	switch (pci->device) {
+		case PCI_DEVICE_ID_QUANTUM:
+			chip->model_name = LONGNAME_QUANTUM;
+			break;
+		case PCI_DEVICE_ID_QUANTUM2:
+			chip->model_name = LONGNAME_QUANTUM_2;
+			break;
+		case PCI_DEVICE_ID_QUANTUM4848:
+			chip->model_name = LONGNAME_QUANTUM_4848;
+			break;
+		case PCI_DEVICE_ID_QUANTUM2626:
+			chip->model_name = LONGNAME_QUANTUM_2626;
+			break;
+		case PCI_DEVICE_ID_QUANTUM_MOBILE:
+			chip->model_name = LONGNAME_QUANTUM_MOBILE;
+			dev_warn(&pci->dev,
+				"Unsupported Quantum device ID 0x%04x! Unreleased hardware.\n",
+				pci->device);
+			break;
+		default:
+			chip->model_name = LONGNAME_QUANTUM;
+			dev_warn(&pci->dev,
+				"Unknown Quantum device ID 0x%04x, using generic name\n",
+				pci->device);
+			break;
+	}
+}
+
 static int snd_quantum_create(struct snd_card *card, struct pci_dev *pci)
 {
 	struct quantum_chip *chip = card->private_data;
 	int err;
 	int i;
+
+	quantum_init_model_data(chip, pci);
 
 	chip->card = card;
 	chip->pci = pci;
@@ -1687,14 +1749,6 @@ fail_regions:
 	return err;
 }
 
-/* ----- PCI table: intentionally scoped to the tested Quantum 2626 ----- */
-
-static const struct pci_device_id snd_quantum_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_PRESONUS, PCI_DEVICE_ID_QUANTUM2626) },
-	{ 0, }
-};
-MODULE_DEVICE_TABLE(pci, snd_quantum_ids);
-
 /* ----- Probe / remove ----- */
 
 static int snd_quantum_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
@@ -1731,7 +1785,7 @@ static int snd_quantum_probe(struct pci_dev *pci, const struct pci_device_id *pc
 	}
 
 	strscpy(card->driver, DRV_NAME, sizeof(card->driver));
-	strscpy(card->shortname, QUANTUM_NAMELONG, sizeof(card->shortname));
+	strscpy(card->shortname, chip->model_name, sizeof(card->shortname));
 	snprintf(card->longname, sizeof(card->longname), "%s at %s irq %i",
 		 card->shortname, pci_name(chip->pci), chip->irq);
 
