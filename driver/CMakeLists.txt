@@ -16,15 +16,15 @@ find_package(KernelHeaders REQUIRED)
 # thanks to "merseyviking" from stack overflow
 add_definitions(-D__KERNEL__ -DMODULE)
 
-# this is needed in order for CLion IDE to provide syntax highlightning
+# this is needed in order for CLion IDE to provide syntax highlighting
 # this is independent from the actual kernel object that is built
 add_executable(dummy
         # add all *.h and *.c files here that # CLion should cover
-        snd-quantum2626.c
+        snd-quantum.c
 )
 
 # CLion IDE will find symbols from <linux/*>
 target_include_directories("dummy" PRIVATE ${KERNELHEADERS_INCLUDE_DIRS})
 
 # Force module name definition which will be resolved at build time
-add_definitions(-DKBUILD_MODNAME="snd_quantum2626")
+add_definitions(-DKBUILD_MODNAME="snd_quantum")

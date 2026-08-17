@@ -26,7 +26,7 @@
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 
-#define DRV_NAME "snd-quantum2626"
+#define DRV_NAME "snd-quantum"
 
 /* ----- PCI table ----- */
 
