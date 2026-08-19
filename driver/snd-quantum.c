@@ -189,6 +189,7 @@ struct quantum_dma_table {
 struct quantum_chip {
 	struct snd_card *card;
 	struct pci_dev *pci;
+	const char *id;
 	const char *model_name;
 	const struct quantum_rate_profile *rate_profiles;
 	unsigned int rate_profile_count;
@@ -1094,13 +1095,20 @@ static int quantum_pcm_channels_for_rate_rule(struct snd_pcm_hw_params *params,
 		.integer = 1,
 	};
 	unsigned int i;
+	unsigned int limit;
 
 	for (i = 0; i < chip->rate_profile_count; i++) {
 		if (!snd_interval_test(rate, chip->rate_profiles[i].rate))
 			continue;
-		allowed.min = min(allowed.min, chip->rate_profiles[i].inputs);
-		allowed.max = max(allowed.max, chip->rate_profiles[i].outputs);
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+			limit = chip->rate_profiles[i].outputs;
+		else
+			limit = chip->rate_profiles[i].inputs;
+
+		if (limit < allowed.min) allowed.min = limit;
+		if (limit > allowed.max) allowed.max = limit;
 	}
+
 	if (!allowed.max)
 		return -EINVAL;
 
@@ -1121,14 +1129,21 @@ static int quantum_pcm_rates_for_channels_rule(struct snd_pcm_hw_params *params,
 		.integer = 1,
 	};
 	unsigned int i;
+	unsigned int limit;
 
 	for (i = 0; i < chip->rate_profile_count; i++) {
-		if (!snd_interval_test(channels, chip->rate_profiles[i].inputs) &&
-			!snd_interval_test(channels, chip->rate_profiles[i].outputs))
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+			limit = chip->rate_profiles[i].outputs;
+		else
+			limit = chip->rate_profiles[i].inputs;
+
+		if (!snd_interval_test(channels, limit))
 			continue;
 
-		allowed.min = min(allowed.min, chip->rate_profiles[i].rate);
-		allowed.max = max(allowed.max, chip->rate_profiles[i].rate);
+		if (chip->rate_profiles[i].rate < allowed.min)
+			allowed.min = chip->rate_profiles[i].rate;
+		if (chip->rate_profiles[i].rate > allowed.max)
+			allowed.max = chip->rate_profiles[i].rate;
 	}
 	if (!allowed.max)
 		return -EINVAL;
@@ -1150,15 +1165,38 @@ static int quantum_pcm_open(struct snd_pcm_substream *substream)
 	int err;
 
 	if ((channels & 0xff) != chip->audio_inputs ||
-	    ((channels >> 8) & 0xff) != chip->audio_outputs)
-		return -ENODEV;
+	    ((channels >> 8) & 0xff) != chip->audio_outputs) {
+		dev_err(&chip->pci->dev,
+		"channels mismatch: hw=0x%08x (in=%u/out=%u) expected in=%u/out=%u\n",
+			channels,
+			channels & 0xff, (channels >> 8) & 0xff,
+			chip->audio_inputs, chip->audio_outputs);
+		return -EINVAL;
+	}
 
 	substream->runtime->hw = quantum_pcm_hw;
 
-	err = snd_pcm_hw_constraint_integer(substream->runtime,
-					    SNDRV_PCM_HW_PARAM_PERIODS);
+	const struct quantum_rate_profile *profile = quantum_get_rate_profile(chip, chip->audio_rate);
+	if (profile) {
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+			substream->runtime->hw.channels_max = profile->outputs;
+		else
+			substream->runtime->hw.channels_max = profile->inputs;
+	} else {
+		dev_warn(&chip->pci->dev, "No rate profile found for %u Hz, using defaults\n", chip->audio_rate);
+	}
+
+	err = snd_pcm_hw_constraint_minmax(substream->runtime,
+		SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+		QUANTUM_AUDIO_PERIOD_FRAMES,
+		QUANTUM_AUDIO_PERIOD_FRAMES);
 	if (err)
 		return err;
+
+	err = snd_pcm_hw_constraint_integer(substream->runtime, SNDRV_PCM_HW_PARAM_PERIODS);
+	if (err)
+		return err;
+
 	err = snd_pcm_hw_rule_add(substream->runtime, 0,
 				  SNDRV_PCM_HW_PARAM_CHANNELS,
 				  quantum_pcm_channels_for_rate_rule, substream,
@@ -1244,33 +1282,53 @@ static int quantum_pcm_hw_params(struct snd_pcm_substream *substream,
 	bool changing_rate;
 	int err = 0;
 
+	dev_dbg(&chip->pci->dev,
+		 "[DEBUG] hw_params: stream=%s rate=%u ch=%u fmt=%d period=%u periods=%u\n",
+		 substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? "PLAY" : "CAP",
+		 params_rate(params),
+		 params_channels(params),
+		 params_format(params),
+		 params_period_size(params),
+		 params_periods(params));
+
+	unsigned int expected_channels;
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		expected_channels = profile->outputs;
+	else
+		expected_channels = profile->inputs;
+
 	if (!profile ||
-		params_channels(params) != profile->outputs ||
-	    params_format(params) != SNDRV_PCM_FORMAT_S32_LE ||
-	    params_period_size(params) != QUANTUM_AUDIO_PERIOD_FRAMES)
+	params_channels(params) != expected_channels ||
+	params_format(params) != SNDRV_PCM_FORMAT_S32_LE ||
+	params_period_size(params) != QUANTUM_AUDIO_PERIOD_FRAMES) {
+		dev_err(&chip->pci->dev, "requested parameters unsupported");
 		return -EINVAL;
+	}
 
 	mutex_lock(&chip->audio_mutex);
 	other = mask == QUANTUM_STREAM_PLAYBACK ?
 		chip->capture_params_substream : chip->playback_params_substream;
 	if (other &&
 	    (other->runtime->rate != params_rate(params) ||
-	     other->runtime->channels != params_channels(params) ||
 	     other->runtime->period_size != params_period_size(params) ||
 	     other->runtime->buffer_size != params_buffer_size(params))) {
+		dev_err(&chip->pci->dev, "changed parameters unsupported");
 		err = -EINVAL;
 		goto unlock;
 	}
 	changing_rate = chip->audio_rate != profile->rate;
 	if (changing_rate && READ_ONCE(chip->audio_engine_running)) {
+		dev_err(&chip->pci->dev, "busy while changing rate");
 		err = -EBUSY;
 		goto unlock;
 	}
 	if (changing_rate) {
 		/* The engine is stopped; fixed DMA mappings remain valid. */
 		err = quantum_tci_set_sample_rate(chip, profile);
-		if (err)
+		if (err) {
+			dev_err(&chip->pci->dev, "changing sample rate TCI failed");
 			goto unlock;
+		}
 	}
 
 	params_substream = mask == QUANTUM_STREAM_PLAYBACK ?
@@ -1287,6 +1345,7 @@ static int quantum_pcm_hw_params(struct snd_pcm_substream *substream,
 		}
 		err = quantum_audio_configure_resources(chip, bytes);
 		if (err)
+			dev_err(&chip->pci->dev, "unable to configure resources");
 			goto clear_params;
 	}
 	goto unlock;
@@ -1614,26 +1673,31 @@ static void quantum_init_model_data(
 {
 	switch (pci->device) {
 		case PCI_DEVICE_ID_QUANTUM:
+			chip->id = "Quantum";
 			chip->model_name = LONGNAME_QUANTUM;
 			chip->rate_profiles = quantum_rate_profiles_quantum;
 			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum);
 			break;
 		case PCI_DEVICE_ID_QUANTUM2:
+			chip->id = "Quantum2";
 			chip->model_name = LONGNAME_QUANTUM_2;
 			chip->rate_profiles = quantum_rate_profiles_quantum2;
 			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum2);
 			break;
 		case PCI_DEVICE_ID_QUANTUM4848:
+			chip->id = "Quantum4848";
 			chip->model_name = LONGNAME_QUANTUM_4848;
 			chip->rate_profiles = quantum_rate_profiles_quantum24848;
 			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum24848);
 			break;
 		case PCI_DEVICE_ID_QUANTUM2626:
+			chip->id = "Quantum2626";
 			chip->model_name = LONGNAME_QUANTUM_2626;
 			chip->rate_profiles = quantum_rate_profiles_quantum2626;
 			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum2626);
 			break;
 		case PCI_DEVICE_ID_QUANTUM_MOBILE:
+			chip->id = "QuantumMobile";
 			chip->model_name = LONGNAME_QUANTUM_MOBILE;
 			// FIXME: extract the appropriate table or error. Fallback for now.
 			chip->rate_profiles = quantum_rate_profiles_quantum;
@@ -1644,6 +1708,7 @@ static void quantum_init_model_data(
 			break;
 		default:
 			// We should never be there, fallback to the original Quantum
+			chip->id = "Quantum";
 			chip->model_name = LONGNAME_QUANTUM;
 			chip->rate_profiles = quantum_rate_profiles_quantum;
 			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum);
@@ -1661,7 +1726,6 @@ static int snd_quantum_create(struct snd_card *card, struct pci_dev *pci)
 	int i;
 
 	quantum_init_model_data(chip, pci);
-
 	chip->card = card;
 	chip->pci = pci;
 	chip->irq = pci->irq;
@@ -1815,6 +1879,7 @@ static int snd_quantum_probe(struct pci_dev *pci, const struct pci_device_id *pc
 		dev_warn(&pci->dev, "audio disabled because no IRQ is available\n");
 	}
 
+	snd_card_set_id(card, chip->id);
 	strscpy(card->driver, DRV_NAME, sizeof(card->driver));
 	strscpy(card->shortname, chip->model_name, sizeof(card->shortname));
 	snprintf(card->longname, sizeof(card->longname), "%s at %s irq %i",
