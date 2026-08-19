@@ -23,8 +23,14 @@ install-module: all
 install-ucm:
 	install -D -m 0644 ../alsa/ucm2/Quantum/Common.conf \
 		$(DESTDIR)$(UCM2_DIR)/Quantum/Common.conf
+	install -D -m 0644 ../alsa/ucm2/Quantum/HiFi.conf \
+		$(DESTDIR)$(UCM2_DIR)/Quantum/HiFi.conf
 	install -D -m 0644 ../alsa/ucm2/Quantum2/HiFi.conf \
 		$(DESTDIR)$(UCM2_DIR)/Quantum2/HiFi.conf
+	install -D -m 0644 ../alsa/ucm2/Quantum2/HiFi.conf \
+		$(DESTDIR)$(UCM2_DIR)/Quantum2626/HiFi.conf
+	install -D -m 0644 ../alsa/ucm2/Quantum2626/HiFi.conf \
+		$(DESTDIR)$(UCM2_DIR)/Quantum48488/HiFi.conf
 	install -D -m 0644 ../alsa/ucm2/conf.d/snd-quantum/snd-quantum.conf \
         $(DESTDIR)$(UCM2_DIR)/conf.d/snd-quantum/snd-quantum.conf
 
