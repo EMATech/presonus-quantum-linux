@@ -1293,18 +1293,18 @@ static int quantum_pcm_hw_params(struct snd_pcm_substream *substream,
 		 params_period_size(params),
 		 params_periods(params));
 
-	unsigned int expected_channels;
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-		expected_channels = profile->outputs;
-	else
-		expected_channels = profile->inputs;
-
 	if (!profile) {
 		dev_err(&chip->pci->dev,
 			"requested parameters unsupported: no profile for rate %u Hz\n",
 			params_rate(params));
 		return -EINVAL;
 	}
+
+	unsigned int expected_channels;
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		expected_channels = profile->outputs;
+	else
+		expected_channels = profile->inputs;
 
 	if (params_channels(params) != expected_channels) {
 		dev_err(&chip->pci->dev,
