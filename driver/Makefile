@@ -27,27 +27,26 @@ install-ucm:
 		$(DESTDIR)$(UCM2_DIR)/Quantum/HiFi.conf
 	install -D -m 0644 ../alsa/ucm2/Quantum2/HiFi.conf \
 		$(DESTDIR)$(UCM2_DIR)/Quantum2/HiFi.conf
-	install -D -m 0644 ../alsa/ucm2/Quantum2/HiFi.conf \
-		$(DESTDIR)$(UCM2_DIR)/Quantum2626/HiFi.conf
 	install -D -m 0644 ../alsa/ucm2/Quantum2626/HiFi.conf \
-		$(DESTDIR)$(UCM2_DIR)/Quantum48488/HiFi.conf
+		$(DESTDIR)$(UCM2_DIR)/Quantum2626/HiFi.conf
+	install -D -m 0644 ../alsa/ucm2/Quantum4848/HiFi.conf \
+		$(DESTDIR)$(UCM2_DIR)/Quantum4848/HiFi.conf
 	install -D -m 0644 ../alsa/ucm2/conf.d/snd-quantum/snd-quantum.conf \
         $(DESTDIR)$(UCM2_DIR)/conf.d/snd-quantum/snd-quantum.conf
 
-# FIXME: detect Wireplumber version. 0.4 -> install-wp4, 0.5 -> install-wp5
 install-wp:
-install-wp4:
 	install -D -m 0644 \
 		../alsa/wireplumber/51-quantum.lua \
 		$(DESTDIR)$(WIREPLUMBER_MAIN_LUA_DIR)/51-quantum.lua
 
+# FIXME: detect Wireplumber version. 0.4 -> install-wp4, 0.5 -> install-wp5
 install-wp5:
 	install -D -m 0644 \
 		../alsa/wireplumber/51-quantum.conf \
 		$(DESTDIR)$(WIREPLUMBER_MAIN_CONF_DIR)/51-quantum.conf
 
-install-audio: install-ucm install-wp5
+install-audio: install-ucm install-wp
 
 install: install-module install-audio
 
-.PHONY: all clean install install-module install-ucm install-wp5 install-audio
+.PHONY: all clean install install-module install-ucm install-wp install-wp5 install-audio
