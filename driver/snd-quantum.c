@@ -169,6 +169,8 @@ MODULE_DESCRIPTION("Experimental PreSonus Quantum Thunderbolt Family ALSA PCIe d
 #define QUANTUM_TCI_CTRL_RSP_POWER_STATE	0x3c
 #define QUANTUM_TCI_CLOCK_SOURCE_INTERNAL	1
 
+static const unsigned int supported_period_sizes[] = { 16, 32, 64, 128, 256, 512, 1024, 2048, 4096 };
+
 struct quantum_tci_header {
 	__le16 length;
 	u8 channel;
@@ -1297,11 +1299,24 @@ static int quantum_pcm_hw_params(struct snd_pcm_substream *substream,
 	else
 		expected_channels = profile->inputs;
 
-	if (!profile ||
-	params_channels(params) != expected_channels ||
-	params_format(params) != SNDRV_PCM_FORMAT_S32_LE ||
-	params_period_size(params) != QUANTUM_AUDIO_PERIOD_FRAMES) {
-		dev_err(&chip->pci->dev, "requested parameters unsupported");
+	if (!profile) {
+		dev_err(&chip->pci->dev,
+			"requested parameters unsupported: no profile for rate %u Hz\n",
+			params_rate(params));
+		return -EINVAL;
+	}
+
+	if (params_channels(params) != expected_channels) {
+		dev_err(&chip->pci->dev,
+			"requested parameters unsupported: channels %u != expected %u\n",
+			params_channels(params), expected_channels);
+		return -EINVAL;
+	}
+
+	if (params_format(params) != SNDRV_PCM_FORMAT_S32_LE) {
+		dev_err(&chip->pci->dev,
+			"requested parameters unsupported: format %d != S32_LE\n",
+			params_format(params));
 		return -EINVAL;
 	}
 
