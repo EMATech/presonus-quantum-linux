@@ -42,7 +42,6 @@ for try in $(seq 1 $MAX_TRIES); do
   systemctl --user stop pipewire.socket pipewire-pulse pipewire wireplumber 2>/dev/null || true
   sleep 2
 
-  killed_any=0
   still_open=0
 
   # Iterate over each detected card
@@ -52,7 +51,7 @@ for try in $(seq 1 $MAX_TRIES); do
         pids=$(sudo fuser "$dev" 2>/dev/null || true)
         for pid in $pids; do
           if [ -n "$pid" ]; then
-            sudo kill -9 "$pid" 2>/dev/null && echo "  [try $try/$MAX_TRIES] Killed PID $pid on card $CARD ($dev)" && killed_any=1
+            sudo kill -9 "$pid" 2>/dev/null && echo "  [try $try/$MAX_TRIES] Killed PID $pid on card $CARD ($dev)"
           fi
         done
       fi
@@ -61,7 +60,7 @@ for try in $(seq 1 $MAX_TRIES); do
 
   # Check if ANY card is still busy
   for CARD in "${CARDS[@]}"; do
-    still=$(sudo lsof /dev/snd/controlC$CARD /dev/snd/pcmC${CARD}D0p /dev/snd/pcmC${CARD}D0c 2>/dev/null || true)
+    still=$(sudo lsof /dev/snd/controlC"$CARD" /dev/snd/pcmC"${CARD}"D0p /dev/snd/pcmC"${CARD}"D0c 2>/dev/null || true)
     if [ -n "$still" ]; then
       echo "  [try $try/$MAX_TRIES] Card $CARD still busy:"
       echo "$still"
@@ -78,7 +77,7 @@ for try in $(seq 1 $MAX_TRIES); do
     break
   fi
 
-  if [ $try -eq $MAX_TRIES ]; then
+  if [ "$try" -eq $MAX_TRIES ]; then
     echo "ERROR: After $MAX_TRIES tries, some Quantum card(s) are still busy."
     echo ""
     echo "Last resort: log out, switch to TTY2 (Ctrl+Alt+F2), run:"
@@ -92,7 +91,7 @@ done
 # Final verification loop
 final_busy=0
 for CARD in "${CARDS[@]}"; do
-  still=$(sudo lsof /dev/snd/controlC$CARD /dev/snd/pcmC${CARD}D0p /dev/snd/pcmC${CARD}D0c 2>/dev/null || true)
+  still=$(sudo lsof /dev/snd/controlC"$CARD" /dev/snd/pcmC"${CARD}"D0p /dev/snd/pcmC"${CARD}"D0c 2>/dev/null || true)
   if [ -n "$still" ]; then
     echo "ERROR: Card $CARD is still open:"
     echo "$still"
@@ -125,7 +124,7 @@ fi
 echo "Loading module..."
 if [ -n "${MODPARAMS:-}" ]; then
   echo "  with params: $MODPARAMS"
-  sudo insmod "$DRIVER_DIR/snd-quantum.ko" $MODPARAMS
+  sudo insmod "$DRIVER_DIR/snd-quantum.ko" "$MODPARAMS"
 else
   sudo insmod "$DRIVER_DIR/snd-quantum.ko"
 fi
