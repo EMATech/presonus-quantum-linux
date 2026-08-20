@@ -58,6 +58,7 @@ MODULE_DEVICE_TABLE(pci, snd_quantum_ids);
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static bool enable_experimental_mobile;
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for PreSonus Quantum card.");
@@ -65,6 +66,9 @@ module_param_array(id, charp, NULL, 0444);
 MODULE_PARM_DESC(id, "ID string for PreSonus Quantum card.");
 module_param_array(enable, bool, NULL, 0444);
 MODULE_PARM_DESC(enable, "Enable PreSonus Quantum card.");
+module_param(enable_experimental_mobile, bool, 0444);
+MODULE_PARM_DESC(enable_experimental_mobile,
+	"Enable support for unreleased/experimental Quantum Mobile hardware (PCI ID 0x0105). Default is false.");
 
 /* Register access for reverse engineering */
 static int reg_read_offset = -1;
@@ -1745,8 +1749,8 @@ static void quantum_init_model_data(
 			chip->rate_profiles = quantum_rate_profiles_quantum;
 			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum);
 			dev_warn(&pci->dev,
-				"Unsupported Quantum device ID 0x%04x! Unreleased hardware.\n",
-				pci->device);
+				"EXPERIMENTAL: Quantum Mobile detected. Profiles are guessed. "
+				"Report any issues to the maintainer.\n");
 			break;
 		default:
 			// We should never be there, fallback to the original Quantum
@@ -1900,6 +1904,13 @@ static int snd_quantum_probe(struct pci_dev *pci, const struct pci_device_id *pc
 	if (!enable[dev]) {
 		dev++;
 		return -ENOENT;
+	}
+
+	if (pci->device == PCI_DEVICE_ID_QUANTUM_MOBILE && !enable_experimental_mobile) {
+		dev_info(&pci->dev,
+			"Quantum Mobile (0x0105) detected but disabled by default. "
+			"Load module with 'enable_experimental_mobile=1' to attempt initialization.\n");
+		return -ENODEV;
 	}
 
 	err = snd_devm_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
