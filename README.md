@@ -23,11 +23,11 @@ Legend: ✅ confirmed on physical hardware · ❎ should work, needs hardware te
 
 | Model          | Connection              | Device support | Playback | Capture | Desktop integration | Current state                                                               |
 |----------------|-------------------------|:--------------:|:--------:|:-------:|:-------------------:|-----------------------------------------------------------------------------|
-| Quantum        | Thunderbolt 2 (PCIe)    |       ❎       |    ❎    |   ❎    |         ❎          | 🎯 Roadmap; needs model-specific hardware and protocol validation           |
-| Quantum 2      | Thunderbolt 2 (PCIe)    |       ✅       |    ✅    |   ✅    |         ❎          | 🎯 Roadmap; static family identity only, with no Linux hardware proof yet   |
-| Quantum 4848   | Thunderbolt 2 (PCIe)    |       ✅       |    ✅    |   ✅    |         ❎          | 🎯 Roadmap; static family identity only, with no Linux hardware proof yet   |
+| Quantum        | Thunderbolt 2 (PCIe)    |       ❎       |    ❎    |   ❎    |         ❎          | 🧪 Active development; 🎯 needs model-specific hardware validation          |
+| Quantum 2      | Thunderbolt 2 (PCIe)    |       ✅       |    ✅    |   ✅    |         ❎          | 🧪 Active development; usable, but stability and performance work continues |
+| Quantum 4848   | Thunderbolt 2 (PCIe)    |       ✅       |    ✅    |   ✅    |         ❎          | 🧪 Active development; usable, but stability and performance work continues |
 | Quantum 2626   | Thunderbolt 3 (PCIe)    |       ✅       |    ✅    |   ✅    |         ✅          | 🧪 Active development; usable, but stability and performance work continues |
-| Quantum Mobile | (Thunderbolt 3?) (PCIe) |       ❎       |    ❌    |   ❌    |         ❌          | ❌ Unreleased hardware. Added for completeness. Unspoorted!                 |
+| Quantum Mobile | (Thunderbolt 3?) (PCIe) |       ❎       |    ❌    |   ❌    |         ❌          | ❌ Unreleased hardware. Added for completeness. Unsupported!                |
 
 A green check means that capability has been observed on owned physical
 hardware. A red X means the repository does not currently support or validate
