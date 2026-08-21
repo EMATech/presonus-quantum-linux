@@ -164,6 +164,12 @@ MODULE_DESCRIPTION("Experimental PreSonus Quantum Thunderbolt Family ALSA PCIe d
 
 #define QUANTUM_TCI_CHANNEL_CONTROL	0x31
 #define QUANTUM_TCI_CTRL_GET_SAMPLE_RATE	0x31
+#define QUANTUM_TCI_RATE_44100			1
+#define QUANTUM_TCI_RATE_48000			2
+#define QUANTUM_TCI_RATE_88200			3
+#define QUANTUM_TCI_RATE_96000			4
+#define QUANTUM_TCI_RATE_176400			5
+#define QUANTUM_TCI_RATE_192000			6
 #define QUANTUM_TCI_CTRL_SET_SAMPLE_RATE	0x32
 #define QUANTUM_TCI_CTRL_RSP_SAMPLE_RATE	0x35
 #define QUANTUM_TCI_CTRL_RSP_STATUS	0x01
@@ -582,39 +588,122 @@ struct quantum_rate_profile {
 };
 
 static const struct quantum_rate_profile quantum_rate_profiles_quantum[] = {
-	{44100, 26, 30, 1},
-	{48000, 26, 30, 2},
-	{88200, 18, 22, 3}, /* ADAT Double Speed (half) */
-	{96000, 18, 22, 4},
-	{176400, 10, 12, 5}, /* ADAT Quad Speed not supported */
-	{192000, 10, 12, 6},
+	/*
+	 * Quantum (aka 26x32) profile
+	 *
+	 * Inputs (26)
+	 * - 2 Mic/Line/Inst
+	 * - 6 Mic/Line
+	 * - 1 S/PDIF (2)
+	 * - 2 ADAT (8×2=16)
+	 *
+	 * Outputs (32)
+	 * - 2 Main
+	 * - 8 Line
+	 * - 2 stereo phones (2×2=4)
+	 * - 1 S/PDIF (2)
+	 * - 2 ADAT (8×2=16)
+	 */
+	{.rate = 44100, .inputs = 26, .outputs = 32, .tci_value = QUANTUM_TCI_RATE_44100},
+	{.rate = 48000, .inputs = 26, .outputs = 32, .tci_value = QUANTUM_TCI_RATE_48000},
+	/* ADAT Double Speed (ADAT channels halved) */
+	{.rate = 88200, .inputs = 18, .outputs = 24, .tci_value = QUANTUM_TCI_RATE_88200},
+	{.rate = 96000, .inputs = 18, .outputs = 24, .tci_value = QUANTUM_TCI_RATE_96000},
+	/* ADAT Quad Speed not supported (ADAT disabled, analog only) */
+	{.rate = 176400, .inputs = 10, .outputs = 16, .tci_value = QUANTUM_TCI_RATE_176400},
+	{.rate = 192000, .inputs = 10, .outputs = 16, .tci_value = QUANTUM_TCI_RATE_192000},
 };
 
 static const struct quantum_rate_profile quantum_rate_profiles_quantum2[] = {
-	{44100, 22, 24, 1},
-	{48000, 22, 24, 2},
-	{88200, 14, 16, 3},
-	{96000, 14, 16, 4},
-	{176400, 6, 8, 5},
-	{192000, 6, 8, 6},
+	/*
+	 * Quantum 2 (aka 22x24) profile
+	 *
+	 * Inputs (22)
+	 * - 2 Mic/Inst
+	 * - 2 Mic/Line
+	 * - 1 S/PDIF (2)
+	 * - 2 ADAT (8×2=16)
+	 *
+	 * Outputs (24)
+	 * - 4 Line
+	 * - 1 stereo phones (2)
+	 * - 1 S/PDIF (2)
+	 * - 2 ADAT (8×2=16)
+	 */
+	{.rate = 44100, .inputs = 22, .outputs = 24, .tci_value = QUANTUM_TCI_RATE_44100},
+	{.rate = 48000, .inputs = 22, .outputs = 24, .tci_value = QUANTUM_TCI_RATE_48000},
+	/* ADAT Double Speed (ADAT channels halved) */
+	{.rate = 88200, .inputs = 14, .outputs = 16, .tci_value = QUANTUM_TCI_RATE_88200},
+	{.rate = 96000, .inputs = 14, .outputs = 16, .tci_value = QUANTUM_TCI_RATE_96000},
+	/* ADAT Quad Speed not supported (ADAT disabled, analog only) */
+	{.rate = 176400, .inputs = 6, .outputs = 8, .tci_value = QUANTUM_TCI_RATE_176400},
+	{.rate = 192000, .inputs = 6, .outputs = 8, .tci_value = QUANTUM_TCI_RATE_192000},
 };
 
-static const struct quantum_rate_profile quantum_rate_profiles_quantum24848[] = {
-	{44100, 48, 48, 1},
-	{48000, 48, 48, 2},
-	{88200, 40, 40, 3},
-	{96000, 40, 40, 4},
-	{176400, 32, 32, 5},
-	{192000, 32, 32, 6},
+static const struct quantum_rate_profile quantum_rate_profiles_quantum4848[] = {
+	/*
+	 * Quantum 4848 profile
+	 *
+	 * Inputs (48)
+	 * - 32 Line
+	 * - 2 ADAT (8×2=16)
+	 *
+	 * Outputs (48)
+	 * - 32 Line
+	 * - 2 ADAT (8×2=16)
+	 */
+	{.rate = 44100, .inputs = 48, .outputs = 48, .tci_value = QUANTUM_TCI_RATE_44100},
+	{.rate = 48000, .inputs = 48, .outputs = 48, .tci_value = QUANTUM_TCI_RATE_48000},
+	/* ADAT Double Speed (ADAT channels halved) */
+	{.rate = 88200, .inputs = 40, .outputs = 40, .tci_value = QUANTUM_TCI_RATE_88200},
+	{.rate = 96000, .inputs = 40, .outputs = 40, .tci_value = QUANTUM_TCI_RATE_96000},
+	/* ADAT Quad Speed not supported (ADAT disabled, analog only) */
+	{.rate = 176400, .inputs = 32, .outputs = 32, .tci_value = QUANTUM_TCI_RATE_176400},
+	{.rate = 192000, .inputs = 32, .outputs = 32, .tci_value = QUANTUM_TCI_RATE_192000},
 };
 
 static const struct quantum_rate_profile quantum_rate_profiles_quantum2626[] = {
-	{44100, 26, 26, 1},
-	{48000, 26, 26, 2},
-	{88200, 18, 18, 3},
-	{96000, 18, 18, 4},
-	{176400, 8, 8, 5},
-	{192000, 8, 8, 6},
+	/*
+	 * Quantum 2626 profile
+	 *
+	 * Inputs (26)
+	 * - 2 Mic/Inst
+	 * - 6 Mic/Line
+	 * - 1 S/PDIF (2)
+	 * - 2 ADAT (8×2=16)
+	 *
+	 * Outputs (26)
+	 * - 8 Line
+	 * - 1 S/PDIF (2)
+	 * - 2 ADAT (8×2=16)
+	 */
+	{.rate = 44100, .inputs = 26, .outputs = 26, .tci_value = QUANTUM_TCI_RATE_44100},
+	{.rate = 48000, .inputs = 26, .outputs = 26, .tci_value = QUANTUM_TCI_RATE_48000},
+	/* ADAT Double Speed (ADAT channels halved) */
+	{.rate = 88200, .inputs = 18, .outputs = 18, .tci_value = QUANTUM_TCI_RATE_88200},
+	{.rate = 96000, .inputs = 18, .outputs = 18, .tci_value = QUANTUM_TCI_RATE_96000},
+	/* ADAT Quad Speed not supported (ADAT disabled, analog only) */
+	{.rate = 176400, .inputs = 8, .outputs = 8, .tci_value = QUANTUM_TCI_RATE_176400},
+	{.rate = 192000, .inputs = 8, .outputs = 8, .tci_value = QUANTUM_TCI_RATE_192000},
+};
+
+static const struct quantum_rate_profile quantum_rate_profiles_quantummobile[] = {
+	/*
+	 * Quantum Mobile profile
+	 *
+	 * Unreleased/prototype hardware.
+	 * Unknown topology.
+	 * Seems safe to assume it has at least 2 inputs and 2 outputs
+	 * and supports the same sample rates as the rest of the family.
+	 * For development/debugging purposes only.
+	 * If you own such a device, please get in touch!
+	 */
+	{.rate = 44100, .inputs = 2, .outputs = 2, .tci_value = QUANTUM_TCI_RATE_44100},
+	{.rate = 48000, .inputs = 2, .outputs = 2, .tci_value = QUANTUM_TCI_RATE_48000},
+	{.rate = 88200, .inputs = 2, .outputs = 2, .tci_value = QUANTUM_TCI_RATE_88200},
+	{.rate = 96000, .inputs = 2, .outputs = 2, .tci_value = QUANTUM_TCI_RATE_96000},
+	{.rate = 176400, .inputs = 2, .outputs = 2, .tci_value = QUANTUM_TCI_RATE_176400},
+	{.rate = 192000, .inputs = 2, .outputs = 2, .tci_value = QUANTUM_TCI_RATE_192000},
 };
 
 static const struct quantum_rate_profile *
@@ -1733,8 +1822,8 @@ static void quantum_init_model_data(
 		case PCI_DEVICE_ID_QUANTUM4848:
 			chip->id = "Quantum4848";
 			chip->model_name = LONGNAME_QUANTUM_4848;
-			chip->rate_profiles = quantum_rate_profiles_quantum24848;
-			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum24848);
+			chip->rate_profiles = quantum_rate_profiles_quantum4848;
+			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum4848);
 			break;
 		case PCI_DEVICE_ID_QUANTUM2626:
 			chip->id = "Quantum2626";
@@ -1745,12 +1834,10 @@ static void quantum_init_model_data(
 		case PCI_DEVICE_ID_QUANTUM_MOBILE:
 			chip->id = "QuantumMobile";
 			chip->model_name = LONGNAME_QUANTUM_MOBILE;
-			// FIXME: extract the appropriate table or error. Fallback for now.
-			chip->rate_profiles = quantum_rate_profiles_quantum;
-			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantum);
+			chip->rate_profiles = quantum_rate_profiles_quantummobile;
+			chip->rate_profile_count = ARRAY_SIZE(quantum_rate_profiles_quantummobile);
 			dev_warn(&pci->dev,
-				"EXPERIMENTAL: Quantum Mobile detected. Profiles are guessed. "
-				"Report any issues to the maintainer.\n");
+				"EXPERIMENTAL: Quantum Mobile detected. Profile is guessed. Report any issues to the maintainer.\n");
 			break;
 		default:
 			// We should never be there, fallback to the original Quantum
