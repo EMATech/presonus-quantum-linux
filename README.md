@@ -1,3 +1,15 @@
+> [!NOTE]
+> **Project Status (September 2026)**
+>
+> This repository, originally based on the reverse-engineering work of **Jamie Steele**, is now **archived**.
+>
+> Active development now based on the [RFC][rfc] by **Nicholas Johnson**, continue in the new dedicated repository:
+> 👉 **[EMATech/quantum](https://github.com/EMATech/quantum)**
+>
+> The new repository hosts the [RFC][rfc] kernel module (`snd-quantum`) with a structure aligned for upstream submission. While this branch remains a valuable reference for multi-model support and protocol recovery details, future development and mainline integration efforts will focus on the new repository.
+
+[rfc]: https://lore.kernel.org/all/20260820083646.11383-1-nicholas.johnson-opensource@outlook.com.au/
+
 # PreSonus Quantum 2626 Linux driver
 
 Experimental out-of-tree ALSA PCI driver for the PreSonus Quantum 2626
